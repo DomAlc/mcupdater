@@ -16,10 +16,16 @@
         let reader;
 
         // Conectar al puerto serial
-        async function connectSerial() {
+       async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
                 await port.open({ baudRate: 115200 });
+        
+                // Controlar DTR para reiniciar el Arduino
+                await port.setSignals({ dataTerminalReady: true });
+                await new Promise(resolve => setTimeout(resolve, 100)); // Esperar 100ms
+                await port.setSignals({ dataTerminalReady: false });
+        
                 writer = port.writable.getWriter();
                 reader = port.readable.getReader();
                 document.getElementById('status').textContent = 'Conectado!';
