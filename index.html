@@ -28,43 +28,48 @@
             }
         }
 
-        // Enviar comando STK500 y leer respuesta
+       // Enviar comando STK500 y leer respuesta
         async function sendCommand(cmd) {
-            await writer.write(cmd);
+            const uint8Array = new Uint8Array(cmd);
+            await writer.write(uint8Array);
             const { value } = await reader.read();
             return value;
         }
-
+        
         // Programar el Arduino
         async function programArduino() {
             const file = document.getElementById('hexFile').files[0];
             if (!file || !port) return;
-
-            // 1. Leer y parsear el archivo HEX
+        
+            // Parsear HEX
             const hex = await file.text();
             const pages = parseHex(hex);
-
-            // 2. Entrar en modo programación STK500
+        
+            // Iniciar comunicación
             let response = await sendCommand([0xAC, 0x53, 0x00, 0x00]);
             if (response[2] !== 0x10) {
                 alert('No se pudo iniciar el bootloader');
                 return;
             }
-
-            // 3. Borrar memoria flash
+        
+            // Borrar memoria
             await sendCommand([0xAC, 0x80, 0x00, 0x00]);
-
-            // 4. Programar cada página
+        
+            // Programar cada página
             for (const [address, data] of pages) {
                 // Cargar dirección
-                await sendCommand([0x55, 0x00, address >> 8, address & 0xFF]);
-                // Programar página
-                await sendCommand([0x64, ...data]);
+                const addrHigh = (address >> 8) & 0xFF;
+                const addrLow = address & 0xFF;
+                await sendCommand([0x55, 0x00, addrHigh, addrLow]);
+        
+                // Programar página (convierte a Uint8Array)
+                const pageCmd = new Uint8Array([0x64, ...data]);
+                await sendCommand(pageCmd);
             }
-
-            // 5. Salir del modo programación
+        
+            // Salir del modo programación
             await sendCommand([0xAC, 0x51, 0x00, 0x00]);
-
+        
             document.getElementById('status').textContent = '¡Programación exitosa!';
         }
 
