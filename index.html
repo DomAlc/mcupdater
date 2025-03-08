@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Arduino STK500 Programmer</title>
+</head>
+<body>
+    <h1>Arduino STK500 Programmer</h1>
+    <button onclick="connectSerial()">Conectar a Puerto Serial</button>
+    <input type="file" id="hexFile" accept=".hex">
+    <button onclick="programArduino()">Programar</button>
+    <p id="status"></p>
+
+    <script>
+        let port;
+        let writer;
+        let reader;
+
+        // Conectar al puerto serial
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+                writer = port.writable.getWriter();
+                reader = port.readable.getReader();
+                document.getElementById('status').textContent = 'Conectado!';
+            } catch (err) {
+                console.error('Error al conectar:', err);
+            }
+        }
+
+        // Enviar comando STK500 y leer respuesta
+        async function sendCommand(cmd) {
+            await writer.write(cmd);
+            const { value } = await reader.read();
+            return value;
+        }
+
+        // Programar el Arduino
+        async function programArduino() {
+            const file = document.getElementById('hexFile').files[0];
+            if (!file || !port) return;
+
+            // 1. Leer y parsear el archivo HEX
+            const hex = await file.text();
+            const pages = parseHex(hex);
+
+            // 2. Entrar en modo programación STK500
+            let response = await sendCommand([0xAC, 0x53, 0x00, 0x00]);
+            if (response[2] !== 0x10) {
+                alert('No se pudo iniciar el bootloader');
+                return;
+            }
+
+            // 3. Borrar memoria flash
+            await sendCommand([0xAC, 0x80, 0x00, 0x00]);
+
+            // 4. Programar cada página
+            for (const [address, data] of pages) {
+                // Cargar dirección
+                await sendCommand([0x55, 0x00, address >> 8, address & 0xFF]);
+                // Programar página
+                await sendCommand([0x64, ...data]);
+            }
+
+            // 5. Salir del modo programación
+            await sendCommand([0xAC, 0x51, 0x00, 0x00]);
+
+            document.getElementById('status').textContent = '¡Programación exitosa!';
+        }
+
+        // Parsear archivo HEX (versión simplificada)
+        function parseHex(hex) {
+            const pages = [];
+            let extendedAddress = 0;
+            hex.split('\n').forEach(line => {
+                if (line.startsWith(':')) {
+                    const bytes = line.slice(1).match(/../g).map(b => parseInt(b, 16));
+                    const type = bytes[3];
+                    if (type === 0x00) { // Data record
+                        const address = (bytes[1] << 8 | bytes[2]) + (extendedAddress << 16);
+                        const data = bytes.slice(4, 4 + bytes[0]);
+                        pages.push([address, data]);
+                    } else if (type === 0x04) { // Extended address
+                        extendedAddress = (bytes[4] << 8) | bytes[5];
+                    }
+                }
+            });
+            return pages;
+        }
+    </script>
+</body>
+</html>
