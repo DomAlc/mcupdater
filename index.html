@@ -33,12 +33,12 @@
         async function resetArduino() {
             if (!port) return;
             try {
-                await port.setSignals({ dataTerminalReady: true });
-                await new Promise(resolve => setTimeout(resolve, 100));
                 await port.setSignals({ dataTerminalReady: false });
                 await new Promise(resolve => setTimeout(resolve, 100));
                 await port.setSignals({ dataTerminalReady: true });
-                await new Promise(resolve => setTimeout(resolve, 500)); // Tiempo para bootloader
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await port.setSignals({ dataTerminalReady: false });
+                await new Promise(resolve => setTimeout(resolve, 600)); // Tiempo para bootloader
             } catch (err) {
                 console.error('Error al resetear:', err);
             }
