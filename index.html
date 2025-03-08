@@ -4,8 +4,8 @@
     <title>Arduino STK500 Programmer</title>
 </head>
 <body>
-    <h1>Arduino STK500 Programmer</h1>
-    <button onclick="connectSerial()">Conectar a Puerto Serial</button>
+    <h1>Programador Arduino ATmega328P</h1>
+    <button onclick="connectSerial()">Conectar al Puerto</button>
     <input type="file" id="hexFile" accept=".hex">
     <button onclick="programArduino()">Programar</button>
     <p id="status"></p>
@@ -15,71 +15,93 @@
         let writer;
         let reader;
 
-        // Conectar al puerto serial
-       async function connectSerial() {
+        // Conectar al puerto serial (sin reset)
+        async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
                 await port.open({ baudRate: 115200 });
-        
-                // Controlar DTR para reiniciar el Arduino
-                await port.setSignals({ dataTerminalReady: true });
-                await new Promise(resolve => setTimeout(resolve, 100)); // Esperar 100ms
-                await port.setSignals({ dataTerminalReady: false });
-        
                 writer = port.writable.getWriter();
                 reader = port.readable.getReader();
-                document.getElementById('status').textContent = 'Conectado!';
+                document.getElementById('status').textContent = 'Puerto conectado';
             } catch (err) {
-                console.error('Error al conectar:', err);
+                document.getElementById('status').textContent = 'Error de conexión';
+                console.error('Error:', err);
             }
         }
 
-       // Enviar comando STK500 y leer respuesta
+        // Reiniciar el Arduino via DTR
+        async function resetArduino() {
+            if (!port) return;
+            try {
+                await port.setSignals({ dataTerminalReady: false });
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await port.setSignals({ dataTerminalReady: true });
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await port.setSignals({ dataTerminalReady: false });
+                await new Promise(resolve => setTimeout(resolve, 500)); // Tiempo para bootloader
+            } catch (err) {
+                console.error('Error al resetear:', err);
+            }
+        }
+
+        // Enviar comando STK500
         async function sendCommand(cmd) {
             const uint8Array = new Uint8Array(cmd);
             await writer.write(uint8Array);
             const { value } = await reader.read();
             return value;
         }
-        
-        // Programar el Arduino
+
+        // Programar el microcontrolador
         async function programArduino() {
-            const file = document.getElementById('hexFile').files[0];
-            if (!file || !port) return;
-        
-            // Parsear HEX
-            const hex = await file.text();
-            const pages = parseHex(hex);
-        
-            // Iniciar comunicación
-            let response = await sendCommand([0xAC, 0x53, 0x00, 0x00]);
-            if (response[2] !== 0x10) {
-                alert('No se pudo iniciar el bootloader');
+            if (!port) {
+                alert('Conecta un puerto primero');
                 return;
             }
-        
-            // Borrar memoria
-            await sendCommand([0xAC, 0x80, 0x00, 0x00]);
-        
-            // Programar cada página
-            for (const [address, data] of pages) {
-                // Cargar dirección
-                const addrHigh = (address >> 8) & 0xFF;
-                const addrLow = address & 0xFF;
-                await sendCommand([0x55, 0x00, addrHigh, addrLow]);
-        
-                // Programar página (convierte a Uint8Array)
-                const pageCmd = new Uint8Array([0x64, ...data]);
-                await sendCommand(pageCmd);
+
+            try {
+                const file = document.getElementById('hexFile').files[0];
+                if (!file) throw new Error('Selecciona un archivo HEX');
+
+                document.getElementById('status').textContent = 'Reiniciando...';
+                await resetArduino();
+
+                document.getElementById('status').textContent = 'Iniciando bootloader...';
+                const response = await sendCommand([0xAC, 0x53, 0x00, 0x00]);
+                if (response[2] !== 0x10) {
+                    throw new Error('Bootloader no responde');
+                }
+
+                const hex = await file.text();
+                const pages = parseHex(hex);
+
+                // Borrar memoria flash
+                await sendCommand([0xAC, 0x80, 0x00, 0x00]);
+
+                // Programar cada página
+                for (const [address, data] of pages) {
+                    // Cargar dirección
+                    const addrHigh = (address >> 8) & 0xFF;
+                    const addrLow = address & 0xFF;
+                    await sendCommand([0x55, 0x00, addrHigh, addrLow]);
+
+                    // Programar página
+                    const pageCmd = new Uint8Array([0x64, ...data]);
+                    await sendCommand(pageCmd);
+                }
+
+                // Salir del modo programación
+                await sendCommand([0xAC, 0x51, 0x00, 0x00]);
+
+                document.getElementById('status').textContent = '¡Programación exitosa!';
+
+            } catch (err) {
+                document.getElementById('status').textContent = `Error: ${err.message}`;
+                console.error('Error:', err);
             }
-        
-            // Salir del modo programación
-            await sendCommand([0xAC, 0x51, 0x00, 0x00]);
-        
-            document.getElementById('status').textContent = '¡Programación exitosa!';
         }
 
-        // Parsear archivo HEX (versión simplificada)
+        // Parsear archivo HEX (formato Intel HEX)
         function parseHex(hex) {
             const pages = [];
             let extendedAddress = 0;
@@ -87,9 +109,11 @@
                 if (line.startsWith(':')) {
                     const bytes = line.slice(1).match(/../g).map(b => parseInt(b, 16));
                     const type = bytes[3];
+                    const length = bytes[0];
+
                     if (type === 0x00) { // Data record
                         const address = (bytes[1] << 8 | bytes[2]) + (extendedAddress << 16);
-                        const data = bytes.slice(4, 4 + bytes[0]);
+                        const data = bytes.slice(4, 4 + length);
                         pages.push([address, data]);
                     } else if (type === 0x04) { // Extended address
                         extendedAddress = (bytes[4] << 8) | bytes[5];
